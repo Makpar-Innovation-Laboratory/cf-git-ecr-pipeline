@@ -1,0 +1,453 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: "Static stack for the ODOS code challenge. Contains resources that need initialized once, i.e. resources that are used across environments. This static will provision: a CodeStar connection to Github, ECRs for application images, IAM roles for various AWS services ."
+
+Parameters:
+  applicationName:
+    Type: String
+    Description: Label appended to stack resources
+    Default: innolab
+  certificateArn:
+    Type: String
+    Description: ARN of the ACM certificate used to sign requests on the domain.
+  hostedZoneId:
+    Type: String
+    Description: Physical ID of the hosted zone where the domain is being served.
+  domainName:
+    Type: String
+    Description: Domain name that is serving/hosting the application
+
+Resources:
+##############################################################################################################################
+#                                              VERSION CONTROL RESOURCES                                                     #
+##############################################################################################################################
+  GitHubConnection:
+    Type: AWS::CodeStarConnections::Connection
+    Description: Connection to GitHub
+    Properties:
+      ConnectionName: !Sub ${applicationName}-github-connection
+      ProviderType: GitHub
+
+  FrontendECR:
+    Type: AWS::ECR::Repository
+    Description: ECR to hold frontend application image
+    Properties:
+      ImageScanningConfiguration: 
+        ScanOnPush: true
+      RepositoryName: !Sub "${applicationName}-frontend"
+      RepositoryPolicyText:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ecr-code-build-policy
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - "ecr:BatchGetImage"
+              - "ecr:GetDownloadUrlForLayer"
+      Tags:
+        - Key: Application
+          Value: !Ref applicationName
+
+  BackendECR:
+    Type: AWS::ECR::Repository
+    Description: ECR to hold backend application image
+    Properties:
+      ImageScanningConfiguration: 
+        ScanOnPush: true
+      RepositoryName: !Sub "${applicationName}-backend"
+      RepositoryPolicyText:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ecr-code-build-policy
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - "ecr:BatchGetImage"
+              - "ecr:GetDownloadUrlForLayer"
+      Tags:
+        - Key: Application
+          Value: !Ref applicationName
+
+##############################################################################################################################
+#                                                     IAM RESOURCES                                                          #
+##############################################################################################################################
+  CloudWatchEventRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action: 
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com            
+      Policies:
+        - PolicyName: !Sub "${applicationName}-cloudwatch-event-pipeline-execution"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: codepipeline:StartPipelineExecution
+                Resource: !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${applicationName}*"
+      RoleName: !Sub ${applicationName}-cloudwatch-role
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Description: Role to allow the pipeline's CodeBuild stage to access other AWS Services
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "codebuild.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: !Sub ${applicationName}-codebuild-role-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: LogPermisisons
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${applicationName}-*
+              - Sid: CloudFrontPermissions
+                Action:
+                  - cloudfront:CreateInvalidation
+                Effect: Allow
+                Resource: '*'
+              - Sid: S3Permissions
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+                Effect: Allow
+                Resource: 
+                  - !Sub "arn:aws:s3:::${applicationName}-*"
+              - Sid: CodeBuildPermissions
+                Action:
+                  - codebuild:CreateReportGroup
+                  - codebuild:CreateReport
+                  - codebuild:UpdateReport
+                  - codebuild:BatchPutTestCases
+                  - codebuild:BatchPutCodeCoverages
+                Effect: Allow
+                Resource:
+                  - !Sub "arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:report-group/${applicationName}*"
+              - Sid: CodeCommitPermissions
+                Action:
+                  - codecommit:GitPull
+                Effect: Allow
+                Resource:
+                  - !Sub "arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${applicationName}*" 
+              - Sid: CodeDeployPermissions
+                Action:
+                  - codedeploy:Get*
+                  - codedeploy:CreateCloudFormationDeployment
+                Effect: Allow
+                Resource: '*'
+              - Sid: SecretManagerPermissions
+                Action:
+                  - secretsmanager:GetSecretValue
+                Effect: Allow
+                Resource:
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${applicationName}-*"
+              - Sid: ECRAuthPermissions
+                Action:
+                  - ecr:GetAuthorizationToken
+                Effect: Allow
+                Resource: '*'
+              - Sid: ECRPermissions
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:GetRepositoryPolicy
+                  - ecr:DescribeRepositories
+                  - ecr:ListImages
+                  - ecr:DescribeImages
+                  - ecr:BatchGetImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                Effect: Allow
+                Resource: 
+                  - !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${applicationName}-*"
+      RoleName: !Sub ${applicationName}-codebuild-executor
+
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Description: Role to allow Innolab Pipeline access to other AWS Services
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "codepipeline.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: !Sub ${applicationName}-codepipeline-role-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: IAMPermissions
+                Action: 
+                  - iam:PassRole
+                Effect: Allow
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${applicationName}-*"
+              - Sid: CloudWatchPermissions
+                Action:
+                  - cloudwatch:*
+                Resource: "*" # TODO: restrict scope
+                Effect: Allow
+              - Sid: S3Permissions
+                Action:
+                  - s3:*
+                Effect: Allow
+                Resource: 
+                  - !Sub "arn:aws:s3:::${applicationName}-*"
+              - Sid: LambdaPermissions
+                Action:
+                  - lambda:UpdateFunctionCode
+                Effect: Allow
+                Resource: 
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${applicationName}-*-*"
+              - Sid: CodeBuildPermissions
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuildBatches
+                  - codebuild:StartBuildBatch
+                Resource: 
+                  - !Sub "arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:*/${applicationName}*"
+                Effect: Allow
+              - Sid: CodeDeployPermissions
+                Action:
+                  - codedeploy:GetDeployment
+                  - codedeploy:CreateDeployment
+                  - codedeploy:GetDeploymentConfig
+                  - codedeploy:GetApplication
+                  - codedeploy:GetApplicationRevision
+                  - codedeploy:RegisterApplicationRevision
+                Resource: 
+                  - !Sub arn:aws:codedeploy:${AWS::Region}:${AWS::AccountId}:application:${applicationName}-*
+                  - !Sub "arn:aws:codedeploy:${AWS::Region}:${AWS::AccountId}:deploymentgroup:${applicationName}-*/${applicationName}-*"               
+                  - !Sub "arn:aws:codedeploy:${AWS::Region}:${AWS::AccountId}:deploymentconfig:*"
+                Effect: Allow
+              - Sid: ECRAuthPermissions
+                Action:
+                  - ecr:GetAuthorizationToken
+                Effect: Allow
+                Resource: '*'
+              - Sid: ECRPermissions
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:GetRepositoryPolicy
+                  - ecr:DescribeRepositories
+                  - ecr:ListImages
+                  - ecr:DescribeImages
+                  - ecr:BatchGetImage
+                Effect: Allow
+                Resource: 
+                  - !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${applicationName}-*"
+              - Sid: ECSPermissions
+                Action:
+                  - ecs:RegisterTaskDefinition
+                Effect: Allow
+                Resource: '*' # TODO: scope this to...cluster? or whereever task definitions are stored? 
+      RoleName: !Sub ${applicationName}-codepipeline-exector
+
+##############################################################################################################################
+#                                                     COVERAGE RESOURCES                                                     #
+##############################################################################################################################
+  BackendCoverageReportGroup:
+    Type: AWS::CodeBuild::ReportGroup
+    Condition: DevResources
+    Properties:
+      ExportConfig:
+        ExportConfigType: NO_EXPORT
+      Name: !Sub ${applicationName}-backend-coverage-report-group
+      Type: CODE_COVERAGE
+
+  BackendTestReportGroup:
+    Type: AWS::CodeBuild::ReportGroup
+    Condition: DevResources
+    Properties:
+      ExportConfig:
+        ExportConfigType: NO_EXPORT
+      Name: !Sub ${applicationName}-backend-test-report-group
+      Type: TEST
+      
+  FrontendCoverageReportGroup:
+    Type: AWS::CodeBuild::ReportGroup
+    Condition: DevResources
+    Properties:
+      ExportConfig:
+        ExportConfigType: NO_EXPORT
+      Name: !Sub ${applicationName}-frontend-coverage-report-group
+      Type: CODE_COVERAGE
+
+  FrontendTestReportGroup:
+    Type: AWS::CodeBuild::ReportGroup
+    Condition: DevResources
+    Properties:
+      ExportConfig:
+        ExportConfigType: NO_EXPORT
+      Name: !Sub ${applicationName}-frontend-test-report-group
+      Type: TEST
+  
+  CoverageBucketLogs:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      AccessControl: LogDeliveryWrite
+      BucketName: !Sub "${applicationName}-coverage-logs"
+
+  CoverageBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      AccessControl: PublicRead
+      BucketName: !Sub "${applicationName}-coverage"
+      LoggingConfiguration:
+        DestinationBucketName: !Ref CoverageBucketLogs
+        LogFilePrefix: 'cov/'
+      WebsiteConfiguration:
+        IndexDocument: 'index.html'
+
+  CoverageBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CoverageBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Action: 
+              - "s3:GetObject"
+              - "s3:PutObject"
+              - "s3:DeleteObject"
+            Principal: '*'
+            Resource: !Sub '${CoverageBucket.Arn}/*'
+    DependsOn:
+      - CoverageBucket
+
+  CoverageDistribution:
+    Type: "AWS::CloudFront::Distribution"
+    Properties:
+      DistributionConfig: 
+        Aliases: 
+          - !Sub "${applicationName}-coverage.${domainName}"
+        Origins: 
+        - ConnectionAttempts: 3
+          ConnectionTimeout: 10
+          DomainName: !GetAtt CoverageBucket.DomainName
+          Id: !Ref CoverageBucket
+          CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginKeepaliveTimeout: 5
+              OriginProtocolPolicy: 'https-only'
+              OriginReadTimeout: 30
+              OriginSSLProtocols:
+                - TLSv1
+                - TLSv1.1
+                - TLSv1.2
+        DefaultCacheBehavior: 
+          AllowedMethods: 
+          - "HEAD"
+          - "DELETE"
+          - "POST"
+          - "GET"
+          - "OPTIONS"
+          - "PUT"
+          - "PATCH"
+          CachedMethods: 
+          - "HEAD"
+          - "GET"
+          ForwardedValues:
+            Cookies:
+              Forward: none
+            QueryString: true
+          Compress: false
+          SmoothStreaming: false
+          TargetOriginId: !Ref CoverageBucket
+          ViewerProtocolPolicy: "redirect-to-https"
+        PriceClass: "PriceClass_All"
+        Enabled: true
+        ViewerCertificate: 
+          AcmCertificateArn: !Ref certificateArn
+          MinimumProtocolVersion: "TLSv1.2_2019"
+          SslSupportMethod: "sni-only"
+        HttpVersion: "http2"
+        DefaultRootObject: 'index.html'
+        IPV6Enabled: true
+        Logging:
+          Bucket: !GetAtt CoverageBucketLogs.DomainName
+          IncludeCookies: false
+          Prefix: 'cov/'
+
+  CoverageRoute53RecordSetGroup:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneId: !Ref hostedZoneId
+      RecordSets:
+        - Name: !Sub "${applicationName}-coverage.${domainName}"
+          Type: A
+          AliasTarget:
+            DNSName: !GetAtt CoverageDistribution.DomainName
+            EvaluateTargetHealth: false
+            # Specify Z2FDTNDATAQYW2. This is always the hosted zone ID when you create an
+            # alias record that routes traffic to a CloudFront distribution.
+            HostedZoneId: Z2FDTNDATAQYW2
+    DependsOn:
+      - CoverageDistribution
+
+Outputs:
+  CoverageBucketDistributionID:
+    Value: !Ref CoverageDistribution
+    Description: Resource ID for CloudFront Distribution
+    Export:
+      Name: !Sub ${AWS::StackName}-CoverageBucketDistributionID
+  CoverageBucketDomain:
+    Value: !GetAtt CoverageDistribution.DomainName
+    Description: Domain name of CloudFront Distribution
+    Export:
+      Name: !Sub ${AWS::StackName}-CoverageBucketDistributionDomain
+  CloudWatchEventRoleArn:
+    Value: !GetAtt CloudWatchEventRole.Arn
+    Description: ARN for CloudWatch Event roles
+    Export:
+      Name: !Sub ${AWS::StackName}-CloudWatchEventRoleArn
+  CodePipelineRoleArn:
+    Value: !GetAtt CodePipelineRole.Arn
+    Description: ARN for CodePipeline role
+    Export:
+      Name: !Sub ${AWS::StackName}-CodePipelineRoleArn
+  CodeBuildRoleArn:
+    Value: !GetAtt CodeBuildRole.Arn
+    Description: ARN for CodeBuild role
+    Export:
+      Name: !Sub ${AWS::StackName}-CodeBuildRoleArn
+  CodeDeployRoleArn:
+    Value: !GetAtt CodeDeployRole.Arn
+    Description: ARN for CodeDeploy role
+    Export:
+      Name: !Sub ${AWS::StackName}-CodeDeployRoleArn
