@@ -451,3 +451,8 @@ Outputs:
     Description: ARN for CodeDeploy role
     Export:
       Name: !Sub ${AWS::StackName}-CodeDeployRoleArn
+  GitHubConnectionArn:
+    Value: !Ref GitHubConnection
+    Description: ARN for the GitHub CodeStar Connection
+    Export:
+      Name: !Sub ${AWS::StackName}-GitHubConnectionARN
