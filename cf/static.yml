@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 
-Description: "Static stack for the ODOS code challenge. Contains resources that need initialized once, i.e. resources that are used across environments. This static will provision: a CodeStar connection to Github, ECRs for application images, IAM roles for various AWS services ."
+Description: "Static stack. Contains resources that need initialized once, i.e. resources that are used across environments. This static will provision: a CodeStar connection to Github, ECRs for application images, IAM roles for various AWS services and an S3-Cloudfront Distribution for hosting test reports, documentation, etc."
 
 Parameters:
   applicationName:
@@ -279,7 +279,6 @@ Resources:
 ##############################################################################################################################
   BackendCoverageReportGroup:
     Type: AWS::CodeBuild::ReportGroup
-    Condition: DevResources
     Properties:
       ExportConfig:
         ExportConfigType: NO_EXPORT
@@ -288,7 +287,6 @@ Resources:
 
   BackendTestReportGroup:
     Type: AWS::CodeBuild::ReportGroup
-    Condition: DevResources
     Properties:
       ExportConfig:
         ExportConfigType: NO_EXPORT
@@ -297,7 +295,6 @@ Resources:
       
   FrontendCoverageReportGroup:
     Type: AWS::CodeBuild::ReportGroup
-    Condition: DevResources
     Properties:
       ExportConfig:
         ExportConfigType: NO_EXPORT
@@ -306,7 +303,6 @@ Resources:
 
   FrontendTestReportGroup:
     Type: AWS::CodeBuild::ReportGroup
-    Condition: DevResources
     Properties:
       ExportConfig:
         ExportConfigType: NO_EXPORT
@@ -446,11 +442,6 @@ Outputs:
     Description: ARN for CodeBuild role
     Export:
       Name: !Sub ${AWS::StackName}-CodeBuildRoleArn
-  CodeDeployRoleArn:
-    Value: !GetAtt CodeDeployRole.Arn
-    Description: ARN for CodeDeploy role
-    Export:
-      Name: !Sub ${AWS::StackName}-CodeDeployRoleArn
   GitHubConnectionArn:
     Value: !Ref GitHubConnection
     Description: ARN for the GitHub CodeStar Connection
