@@ -251,6 +251,16 @@ Resources:
                   - !Sub "arn:aws:codedeploy:${AWS::Region}:${AWS::AccountId}:deploymentgroup:${applicationName}-*/${applicationName}-*"               
                   - !Sub "arn:aws:codedeploy:${AWS::Region}:${AWS::AccountId}:deploymentconfig:*"
                 Effect: Allow
+              - Sid: CodeStarPermissions
+                Action: 
+                  - codestar-connections:CreateConnection
+                  - codestar-connections:DeleteConnection
+                  - codestar-connections:UseConnection
+                  - codestar-connections:GetConnection
+                  - codestar-connections:ListConnections
+                Effect: Allow
+                Resource:
+                  - !Sub "arn:aws:codestar-connections:${AWS::Region}:${AWS::AccountId}:connection/*"
               - Sid: ECRAuthPermissions
                 Action:
                   - ecr:GetAuthorizationToken

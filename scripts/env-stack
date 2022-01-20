@@ -83,9 +83,9 @@ elif [ "$ACTION" == "delete" ]
 then
     log "Deleting \e[1m${APPLICATION^}-${ENV_STACK}-${ENVIRONMENT}\e[0m"
     aws cloudformation delete-stack \
-        --stack-name "${APPLICATION^}-${ENV_STACK}-${ENVIRONMENT}
+        --stack-name "${APPLICATION^}-${ENV_STACK}-${ENVIRONMENT}"
 else
     log "Action not understood"
 fi
 
-rm ./cluster.yml
+rm ./env.yml
